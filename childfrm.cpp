@@ -10,6 +10,7 @@
 #include "mainfrm.h"
 #include "sendvw.h"
 
+#include "DarkMode.h"
 
 #include "winplace.h"
 
@@ -54,6 +55,12 @@ BOOL CChildFrame::OnCreateClient( LPCREATESTRUCT lpcs,
 
    m_pDoc = (CMUSHclientDoc*) pContext->m_pCurrentDoc;
    ASSERT_VALID(m_pDoc);
+
+   // Apply dark mode to this MDI child window if enabled
+   if (DarkMode::g_darkModeEnabled)
+     {
+     DarkMode::ApplyDarkModeToMDIChild(m_hWnd);
+     }
 
 
   m_wndSplitter.m_pDoc = m_pDoc;

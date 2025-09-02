@@ -17,6 +17,10 @@
 
 #include "dialogs\Splash.h"
 
+#include "DarkMode.h"
+#include "UAHMenuBar.h"
+#include "NotepadDarkMode.h"
+
 
 #include "dialogs\TipDlg.h"
 #include "dialogs\SendToAllDlg.h"
@@ -258,6 +262,7 @@ m_bFullScreen = false;
 m_bFlashingWindow = false;
 m_iTabsCount = 0;
 m_backgroundColour = 0xFFFFFFFF;  // use default background colour
+m_pfnOriginalWndProc = NULL;  // for dark mode hook
 
 ZeroMemory(&m_niData,sizeof(NOTIFYICONDATA));
 m_niData.cbSize = sizeof(NOTIFYICONDATA);
@@ -430,6 +435,33 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
     {
     timeLastTimerFired = CTime::GetCurrentTime();
     timeLastTickFired  = CTime::GetCurrentTime();
+    }
+
+  // Apply dark mode to main frame after window is fully created
+  // Try simple test function first
+  void TestDarkModeBasic(HWND hWnd);  // Forward declaration
+  TestDarkModeBasic(m_hWnd);
+  
+  // Try simpler menu dark mode approach
+  void EnableBuiltInDarkModeForMenus(HWND hWnd);  // Forward declaration
+  EnableBuiltInDarkModeForMenus(m_hWnd);
+  
+  if (DarkMode::g_darkModeSupported && DarkMode::g_darkModeEnabled)
+    {
+    DarkMode::ApplyDarkModeToMDIFrame(m_hWnd);
+    UAHMenuBar::EnableDarkMenuBarForMFC(m_hWnd);
+    
+    #ifdef _DEBUG
+    TRACE("Dark Mode: Applied to main frame window\n");
+    #endif
+    
+    // Disable timer for now to stop flickering - only repaint on events
+    // SetTimer(99999, 500, NULL);  // Paint every 500ms to combat Windows overriding us
+    
+    // Force a redraw
+    RedrawWindow(NULL, NULL, RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+    
+    // Dark mode is set up via the existing painting system
     }
 
 	return 0;
@@ -1991,6 +2023,101 @@ void CMainFrame::AddTrayIcon (void)
 LRESULT CMainFrame::WindowProc(UINT message, WPARAM wParam, LPARAM lParam) 
 {
 
+    #ifdef _DEBUG
+    // Debug: Log UAH messages  
+    if (message == WM_UAHDRAWMENU || message == WM_UAHDRAWMENUITEM)
+    {
+        TRACE("MFC WindowProc: Received UAH message 0x%04X\n", message);
+    }
+    // Also log some common messages to see if this is working
+    static int count = 0;
+    if (count < 3 && (message == WM_PAINT || message == WM_NCPAINT))
+    {
+        TRACE("MFC WindowProc: Working, received message 0x%04X\n", message);
+        count++;
+    }
+    #endif
+    
+    // Try UAH (Undocumented Application Hooks) first - Notepad++ approach
+    if (DarkMode::g_darkModeEnabled)
+    {
+        LRESULT lr = 0;
+        if (runUAHWndProc(m_hWnd, message, wParam, lParam, &lr))
+        {
+            return lr;
+        }
+    }
+    
+    // Handle specific messages for dark mode
+    switch (message)
+    {
+    case WM_NCPAINT:
+    case WM_NCACTIVATE:
+        {
+            // Let MFC handle it first
+            LRESULT result = CMDIFrameWnd::WindowProc(message, wParam, lParam);
+            
+            // Only paint menu bar on non-client paint messages, not regular paint
+            if (message == WM_NCPAINT)
+            {
+                PaintDarkMenuBar(m_hWnd);
+            }
+            
+            return result;
+        }
+        
+    case WM_PAINT:
+    case WM_ERASEBKGND:
+        {
+            // Let MFC handle these without menu bar painting
+            LRESULT result = CMDIFrameWnd::WindowProc(message, wParam, lParam);
+            return result;
+        }
+        break;
+        
+    case WM_MENUSELECT:
+    case WM_INITMENUPOPUP:
+    case WM_INITMENU:
+        {
+            // Don't repaint on menu transition messages to avoid flicker
+            // Let UAH messages handle the drawing instead
+        }
+        break;
+        
+    case WM_UAHDRAWMENU:
+        {
+            // Handle undocumented Windows message for menu bar drawing
+            LRESULT result;
+            if (runUAHWndProc(m_hWnd, message, wParam, lParam, &result))
+            {
+                return result;
+            }
+            // If not handled by UAH, let default processing continue
+        }
+        break;
+        
+    case WM_UAHDRAWMENUITEM:
+        {
+            // Handle undocumented Windows message for menu item drawing
+            LRESULT result;
+            if (runUAHWndProc(m_hWnd, message, wParam, lParam, &result))
+            {
+                return result;
+            }
+            // If not handled by UAH, let default processing continue
+        }
+        break;
+        
+    case WM_MOUSELEAVE:
+        {
+            // Mouse left the window - clear any hover states
+            PaintDarkMenuBar(m_hWnd);
+        }
+        break;
+        
+        
+    }
+
  if (message == WM_USER_TRAY_ICON_MESSAGE)
    {
 
@@ -2341,3 +2468,62 @@ void CMainFrame::CheckTimerFallback ()
 
   } // end of CMainFrame::CheckTimerFallback
 
+// Dark mode window procedure hook using Notepad++ UAH approach
+LRESULT CALLBACK CMainFrame::DarkModeWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    CMainFrame* pThis = (CMainFrame*)GetWindowLongPtr(hWnd, GWLP_USERDATA);
+    if (!pThis || !pThis->m_pfnOriginalWndProc)
+        return ::DefWindowProc(hWnd, message, wParam, lParam);
+    
+    #ifdef _DEBUG
+    // Debug: Log UAH messages
+    if (message == WM_UAHDRAWMENU || message == WM_UAHDRAWMENUITEM)
+    {
+        TRACE("DarkModeWndProc: Received UAH message 0x%04X\n", message);
+    }
+    // Also log some common messages to see if hook is working
+    static int count = 0;
+    if (count < 5 && (message == WM_PAINT || message == WM_NCPAINT))
+    {
+        TRACE("DarkModeWndProc: Hook working, received message 0x%04X\n", message);
+        count++;
+    }
+    #endif
+    
+    // Try UAH (Undocumented Application Hooks) first - Notepad++ approach
+    if (DarkMode::g_darkModeEnabled)
+    {
+        LRESULT lr = 0;
+        if (runUAHWndProc(hWnd, message, wParam, lParam, &lr))
+        {
+            return lr;
+        }
+    }
+    
+    // Handle other dark mode messages
+    switch (message)
+    {
+    case WM_NCPAINT:
+    case WM_NCACTIVATE:
+        {
+            // Let the original handler paint first
+            LRESULT result = CallWindowProc(pThis->m_pfnOriginalWndProc, hWnd, message, wParam, lParam);
+            
+            // Then apply dark mode adjustments if needed
+            if (DarkMode::g_darkModeEnabled)
+            {
+                // Force dark mode colors for non-client area
+                DarkMode::RefreshTitleBarThemeColor(hWnd);
+                
+                // Try direct menu bar painting as fallback
+                PaintDarkMenuBar(hWnd);
+            }
+            
+            return result;
+        }
+        break;
+    }
+    
+    // Pass through to original window procedure
+    return CallWindowProc(pThis->m_pfnOriginalWndProc, hWnd, message, wParam, lParam);
+}

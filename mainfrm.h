@@ -38,6 +38,9 @@ class CMainFrame : public CMDIFrameWnd
 	DECLARE_DYNAMIC(CMainFrame)
 public:
 	CMainFrame();
+	// Dark mode support
+	WNDPROC m_pfnOriginalWndProc;
+	static LRESULT CALLBACK DarkModeWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
 	BOOL OnDynamicTipText(UINT id, NMHDR* pNMHDR, LRESULT* pResult);
 

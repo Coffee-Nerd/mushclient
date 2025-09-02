@@ -21,6 +21,8 @@
 #include "winplace.h"
 #include "StatLink.h"
 
+#include "DarkMode.h"
+
 #include "dialogs\welcome.h"
 #include "dialogs\welcome1.h"
 
@@ -238,6 +240,10 @@ BOOL CMUSHclientApp::InitInstance()
 #ifdef PRE_RELEASE
   MUSHCLIENT_VERSION += "-pre";
 #endif
+
+  // Early initialization of dark mode support (before window creation)
+  DarkMode::InitDarkMode();
+  DarkMode::EnableDarkModeForMFCApp();
 
   if (GetModuleFileName (NULL, fullfilename, sizeof (fullfilename)))
     m_strMUSHclientFileName = ExtractDirectory (CString (fullfilename));
